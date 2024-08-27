@@ -80,25 +80,6 @@ export const friendshipRequestRouter = router({
        *  - Run `yarn test` to verify your answer
        */
 
-      // Check existing request
-      const existingRequest = await ctx.db
-        .selectFrom('friendships')
-        .where('userId', '=', ctx.session.userId)
-        .where('friendUserId', '=', input.friendUserId)
-        .where('status', '=', FriendshipStatusSchema.Values['declined'])
-        .select('id')
-        .executeTakeFirst()
-
-      if (existingRequest) {
-        await ctx.db
-          .updateTable('friendships')
-          .set({ status: FriendshipStatusSchema.Values['requested'] })
-          .where('id', '=', existingRequest.id)
-          .execute()
-
-        return existingRequest
-      }
-
       return ctx.db
         .insertInto('friendships')
         .values({
@@ -106,6 +87,11 @@ export const friendshipRequestRouter = router({
           friendUserId: input.friendUserId,
           status: FriendshipStatusSchema.Values['requested'],
         })
+        .onConflict((oc) =>
+          oc.columns(['userId', 'friendUserId']).doUpdateSet({
+            status: FriendshipStatusSchema.Values['requested'],
+          })
+        )
         .execute()
     }),
 
@@ -138,7 +124,7 @@ export const friendshipRequestRouter = router({
          *  - https://kysely-org.github.io/kysely/classes/Kysely.html#updateTable
          */
 
-        // Check friendship request
+        // Check the friendship request
         const friendshipRequest = await t
           .selectFrom('friendships')
           .where('userId', '=', input.friendUserId)
@@ -148,36 +134,30 @@ export const friendshipRequestRouter = router({
           .executeTakeFirst()
 
         if (friendshipRequest) {
-          await t
-            .updateTable('friendships')
-            .set({ status: FriendshipStatusSchema.Values['accepted'] })
-            .where('id', '=', friendshipRequest.id)
-            .execute()
-        }
+          // Perform both update and insert operations concurrently
+          await Promise.all([
+            t
+              .updateTable('friendships')
+              .set({
+                status: FriendshipStatusSchema.Values['accepted'],
+              })
+              .where('id', '=', friendshipRequest.id)
+              .execute(),
 
-        // Check existing friendship
-        const existingFriendship = await t
-          .selectFrom('friendships')
-          .where('userId', '=', ctx.session.userId)
-          .where('friendUserId', '=', input.friendUserId)
-          .select('id')
-          .executeTakeFirst()
-
-        if (!existingFriendship) {
-          await t
-            .insertInto('friendships')
-            .values({
-              userId: ctx.session.userId,
-              friendUserId: input.friendUserId,
-              status: FriendshipStatusSchema.Values['accepted'],
-            })
-            .execute()
-        } else {
-          await t
-            .updateTable('friendships')
-            .set({ status: FriendshipStatusSchema.Values['accepted'] })
-            .where('id', '=', existingFriendship.id)
-            .execute()
+            t
+              .insertInto('friendships')
+              .values({
+                userId: ctx.session.userId,
+                friendUserId: input.friendUserId,
+                status: FriendshipStatusSchema.Values['accepted'],
+              })
+              .onConflict((oc) =>
+                oc.columns(['userId', 'friendUserId']).doUpdateSet({
+                  status: FriendshipStatusSchema.Values['accepted'],
+                })
+              )
+              .execute(),
+          ])
         }
       })
     }),
